@@ -120,9 +120,33 @@ def NuttcpUDP_test_mod (Mbps, PacketLenght, RemoteHostIP):
 			break
 		gen = float(spd) + (( float(gen) - float(spd))/2)
 		gen = round(gen,2)
-	
+
+def NuttcpUDP_test_modd (Mbps, PacketLenght, RemoteHostIP):
+	_spd = 0	
+	spd = 0
+	gen = Mbps
+	rgen = 0
+	loss = 0
+	while 1:
+		nuttcp = subprocess.Popen("nuttcp -u -T60" + " -Ri" + str(gen) + "m" + " -l" + str(PacketLenght) + " " + str(RemoteHostIP), shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+		nuttcpOutput = nuttcp.stdout.readlines()
+		spd = nuttcpOutput[-1].split()[6]
+		loss = nuttcpOutput[-1].split()[-2]
+		rgen = spd/loss
+		print "GEN:", gen, " SPEED:", _spd, " LOST:", loss, " REAL_GEN:", rgen 
+		if rgen != gen:
+			gen = rgen
+		if float(loss) < 0.5:
+##			if float(loss) > 0:
+			return gen
+			break
+			
+		gen = (float(gen) + float(spd))/2
+		gen = round(gen,2)
+
+
 def NuttcpProductionTest (PacketLenght, RemoteHostIP):
-	Speed = NuttcpUDP_test_mod (StartMbpsForNuttcp, PacketLenght, RemoteHostIP)
+	Speed = NuttcpUDP_test_modd (StartMbpsForNuttcp, PacketLenght, RemoteHostIP)
 	print Speed	
 	e = 5
 	while e != 0:
@@ -139,9 +163,9 @@ def NuttcpProductionTest (PacketLenght, RemoteHostIP):
 		cpu_load_on_site2 = ParsingVmstatOutput(LocalFileVmstatS2)
 		print cpu_load_on_site1, "CPU load on Site_1"
 		print cpu_load_on_site2, "CPU load on Site_2"
-		
+
 		e = e - 1
-		
+
 NuttcpProductionTest (UDP1400, RemTrafGenMachineIP)
 NuttcpProductionTest (UDP512, RemTrafGenMachineIP)
 NuttcpProductionTest (UDP64, RemTrafGenMachineIP)
