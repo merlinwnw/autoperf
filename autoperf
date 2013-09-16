@@ -18,6 +18,7 @@ RemoteFileVmstatS1 = '/root/vmstat_s1'
 LocalFileVmstatS2 = '/root/vmstat_s2'
 RemoteFileVmstatS2 = '/root/vmstat_s2'
 StartMbpsForNuttcp = 1000
+udp_start_gen = 100
 UDP1400 = 1400
 UDP512 = 512
 UDP64 = 64
@@ -28,29 +29,32 @@ lsp_pass = 'pass'
 srv = 'srv'
 
 def StartVmstat (Hostname, Port, Username, Password, RemoteFile):
-    vmstat_grep = []
-    vmstat_pids = []
-    start_vmstat = "vmstat 2 -n > " + str(RemoteFile) + " &"
-    paramiko.util.log_to_file('paramiko.log')
-    s = paramiko.SSHClient()
-    s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    s.connect(Hostname, Port, Username, Password)
-    stdin, stdout, stderr = s.exec_command('ps -A | grep vmstat')
-    vmstat_grep = stdout.readlines()
-    for line in vmstat_grep:
-        vmstat_pids.append(line.split()[0])
-    if len(vmstat_pids) > 0:
-        for i in vmstat_pids:
-            stdin, stdout, stderr = s.exec_command("kill " + str(i))
-        stdin, stdout, stderr = s.exec_command(start_vmstat)
-        stdin, stdout, stderr = s.exec_command('ps -A | grep vmstat')
-        vmstat_current_pid = stdout.read().split()[0]
-    else:
-        stdin, stdout, stderr = s.exec_command(start_vmstat)
-        stdin, stdout, stderr = s.exec_command('ps -A | grep vmstat')
-        vmstat_current_pid = stdout.read().split()[0]
-    s.close()
-    return vmstat_current_pid
+	vmstat_grep = []
+	vmstat_pids = []
+	start_vmstat = "vmstat 1 -n > " + str(RemoteFile) + " &"
+	paramiko.util.log_to_file('paramiko.log')
+	s = paramiko.SSHClient()
+	s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+	s.connect(Hostname, Port, Username, Password)
+	stdin, stdout, stderr = s.exec_command('ps -A | grep vmstat')
+	vmstat_grep = stdout.readlines()
+	for line in vmstat_grep:
+		vmstat_pids.append(line.split()[0])
+	if len(vmstat_pids) > 0:
+		for i in vmstat_pids:
+			stdin, stdout, stderr = s.exec_command("kill " + str(i))
+		stdin, stdout, stderr = s.exec_command(start_vmstat)
+		time.sleep(3)
+		stdin, stdout, stderr = s.exec_command('ps -A | grep vmstat')
+		vmstat_current_pid = stdout.read().split()[0]
+	else:
+		stdin, stdout, stderr = s.exec_command(start_vmstat)
+		time.sleep(3)
+		stdin, stdout, stderr = s.exec_command('ps -A | grep vmstat')
+		vmstat_current_pid = stdout.read().split()[0]
+	s.close()
+	return vmstat_current_pid
+
 def StopVmstat (Hostname, Port, Username, Password):
     vmstat_grep = []
     vmstat_pids = []
@@ -120,7 +124,7 @@ def LSPSwitch(lsp, gate_ip, port, user, passwd):
 		s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 		s.connect(gate_ip, port, user, passwd)
 		stdin, stdout, stderr = s.exec_command('lsp_mgr load -f /opt/lsp/client.311.cp.ESP_IMIT.lsp')
-	elif lsp == 'esc_ci':
+	elif lsp == 'esp_ci':
 		paramiko.util.log_to_file('paramiko.log')
 		s = paramiko.SSHClient()
 		s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -138,26 +142,115 @@ def LSPSwitch(lsp, gate_ip, port, user, passwd):
 		s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 		s.connect(gate_ip, port, user, passwd)
 		stdin, stdout, stderr = s.exec_command('lsp_mgr load -f /opt/lsp/pass.lsp')	
+	ping = subprocess.Popen("ping " + str(RemTrafGenMachineIP) + ' -c 5' , shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
 		
 def IperfTCP_test (remote_host_ip):
+	vmstat_current_pid_on_s1 = StartVmstat(gate_2, port, username, password, RemoteFileVmstatS1)
+	vmstat_current_pid_on_s2 = StartVmstat(gate_1, port, username, password, RemoteFileVmstatS2)
+	res = []
 	paramiko.util.log_to_file('paramiko.log')
 	s = paramiko.SSHClient()
 	s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 	s.connect(remote_host_ip, port, username, password)
-	stdin, stdout, stderr = s.exec_command('killall iperf && iperf -s')
-#	stdin, stdout, stderr = s.exec_command('iperf -s')
-	time.sleep(1)
-	iperf = subprocess.Popen("iperf -t 10" + " -c " + str(remote_host_ip) + ' | grep 0-1' , shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
-	iperf_out = iperf.stdout.readlines()
-	spd = iperf_out[-1].split()[-2]
-	print spd, 'MBPS'
+	for i in range(5):
+		stdin, stdout, stderr = s.exec_command('killall iperf')
+		time.sleep(1)
+		stdin, stdout, stderr = s.exec_command('iperf -s')
+		time.sleep(1)
+		iperf = subprocess.Popen("iperf -t 60" + " -c " + str(remote_host_ip) + ' | grep 0-6' , shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+		iperf_out = iperf.stdout.readlines()
+		spd = iperf_out[-1].split()[-2]
+		spd = float(spd)
+		spd = round(spd,2)
+		res.append(spd)
+	print res
+	stdin, stdout, stderr = s.exec_command('killall iperf')
+	GetVmstatFiles(gate_2, port, username, password, LocalFileVmstatS1, RemoteFileVmstatS1)
+	GetVmstatFiles(gate_1, port, username, password, LocalFileVmstatS2, RemoteFileVmstatS2)
+	cpu_load_on_site1 = ParsingVmstatOutput(LocalFileVmstatS1)
+	cpu_load_on_site2 = ParsingVmstatOutput(LocalFileVmstatS2)
+	print round(cpu_load_on_site1), "CPU load on Site_1"
+	print round(cpu_load_on_site2), "CPU load on Site_2"
 	
+
 	
+def IperfTCP_dual_test (remote_host_ip):
+	vmstat_current_pid_on_s1 = StartVmstat(gate_2, port, username, password, RemoteFileVmstatS1)
+	vmstat_current_pid_on_s2 = StartVmstat(gate_1, port, username, password, RemoteFileVmstatS2)
+	res = []
+	paramiko.util.log_to_file('paramiko.log')
+	s = paramiko.SSHClient()
+	s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+	s.connect(remote_host_ip, port, username, password)
+	for i in range(5):
+		stdin, stdout, stderr = s.exec_command('killall iperf')
+		time.sleep(1)
+		stdin, stdout, stderr = s.exec_command('iperf -s')
+		time.sleep(1)
+		iperf = subprocess.Popen("iperf -t 60 " + " -c " + str(remote_host_ip) + ' -d | grep 0-6' , shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+		iperf_out = iperf.stdout.readlines()
+		spd1 = iperf_out[-1].split()[-2]
+		spd2 = iperf_out[-2].split()[-2]
+		spd = float(spd1) + float(spd2)
+		spd = round(spd,2)
+		res.append(spd)
+	print res
+	stdin, stdout, stderr = s.exec_command('killall iperf')
+	GetVmstatFiles(gate_2, port, username, password, LocalFileVmstatS1, RemoteFileVmstatS1)
+	GetVmstatFiles(gate_1, port, username, password, LocalFileVmstatS2, RemoteFileVmstatS2)
+	cpu_load_on_site1 = ParsingVmstatOutput(LocalFileVmstatS1)
+	cpu_load_on_site2 = ParsingVmstatOutput(LocalFileVmstatS2)
+	print round(cpu_load_on_site1), "CPU load on Site_1"
+	print round(cpu_load_on_site2), "CPU load on Site_2"
+
+	
+def IperfTCP_dual_p2_test (remote_host_ip):
+	vmstat_current_pid_on_s1 = StartVmstat(gate_2, port, username, password, RemoteFileVmstatS1)
+	vmstat_current_pid_on_s2 = StartVmstat(gate_1, port, username, password, RemoteFileVmstatS2)
+	res = []
+	global udp_start_gen
+	paramiko.util.log_to_file('paramiko.log')
+	s = paramiko.SSHClient()
+	s.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+	s.connect(remote_host_ip, port, username, password)
+	for i in range(5):
+		stdin, stdout, stderr = s.exec_command('killall iperf')
+		time.sleep(1)
+		stdin, stdout, stderr = s.exec_command('iperf -s')
+		time.sleep(1)
+		iperf = subprocess.Popen("iperf -t 60" + " -c " + str(remote_host_ip) + ' -d -P2 | grep 0-6 | grep SUM' , shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+		iperf_out = iperf.stdout.readlines()
+		spd1 = iperf_out[-1].split()[-2]
+		spd2 = iperf_out[-2].split()[-2]
+		spd = float(spd1) + float(spd2)
+		spd = float(spd1) + float(spd2)
+		spd = round(spd,2)
+		res.append(spd)
+	print res
+	stdin, stdout, stderr = s.exec_command('killall iperf')
+	GetVmstatFiles(gate_2, port, username, password, LocalFileVmstatS1, RemoteFileVmstatS1)
+	GetVmstatFiles(gate_1, port, username, password, LocalFileVmstatS2, RemoteFileVmstatS2)
+	cpu_load_on_site1 = ParsingVmstatOutput(LocalFileVmstatS1)
+	cpu_load_on_site2 = ParsingVmstatOutput(LocalFileVmstatS2)
+	print round(cpu_load_on_site1), "CPU load on Site_1"
+	print round(cpu_load_on_site2), "CPU load on Site_2"
+	udp_start_gen = (sum(res)/5)*1.7
+
+def IperfFullTCP_test():
+	print 'one way tcp'
+	IperfTCP_test (RemTrafGenMachineIP)
+	print 'tcp dual'
+	IperfTCP_dual_test (RemTrafGenMachineIP)
+	print 'tcp dual p2'
+	IperfTCP_dual_p2_test (RemTrafGenMachineIP)
 	
 def NuttcpUDP_test_modd (Mbps, PacketLenght, RemoteHostIP):
 	_spd = 0	
 	spd = 0
-	gen = Mbps
+	if udp_start_gen < 1000:
+		gen = udp_start_gen
+	else:
+		gen = Mbps
 	rgen = 0
 	loss = 0
 	while 1:
@@ -166,51 +259,117 @@ def NuttcpUDP_test_modd (Mbps, PacketLenght, RemoteHostIP):
 		spd = nuttcpOutput[-1].split()[6]
 		loss = nuttcpOutput[-1].split()[-2]
 		rgen = (float(spd)/( 100 - float(loss))) * 100
-		rgen = round(rgen)
+		rgen = round(rgen,2)
 		print "GEN:", gen, " SPEED:", spd, " LOST:", loss, " REAL_GEN:", rgen 
 		if float(loss) > 0:
 			print "loss > 0"
+#			if ( 100 * (float(rgen) / float(gen))) < 90:
+#				print "(float(rgen) / float(gen))) < 0.93"
+#				gen = rgen
+#			else:
+#				print "(float(rgen) / float(gen))) >= 0.93"
+			if float(loss) < 0.5:
+				print "float(loss) < 0.5"
+##			if float(loss) > 0:
+				if float(loss) == 0:
+					print 'loss = 0'
+					gen = 1.05 * gen
+				else:
+					return gen
+					break
+			gen = (float(gen) + float(spd))/2
+			gen = round(gen,2)
+		else:
+			gen = 1.05 * gen
+			print "loss = 0"
+#			return gen
+#			break
+
+def NuttcpUDP_test_mod (Mbps, PacketLenght, RemoteHostIP):
+	_spd = 0	
+	spd = 0
+	if udp_start_gen < 1000:
+		gen = udp_start_gen
+	else:
+		gen = Mbps
+	rgen = 0
+	loss = 0
+	while 1:
+		nuttcp = subprocess.Popen("nuttcp -u -T30" + " -Ri" + str(gen) + "m" + " -l" + str(PacketLenght) + " " + str(RemoteHostIP), shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+		nuttcpOutput = nuttcp.stdout.readlines()
+		spd = nuttcpOutput[-1].split()[6]
+		loss = nuttcpOutput[-1].split()[-2]
+		rgen = (float(spd)/( 100 - float(loss))) * 100
+		rgen = round(rgen,2)
+		print "GEN:", gen, " SPEED:", spd, " LOST:", loss, " REAL_GEN:", rgen 
+		if float(loss) > 0:
+#			print "loss > 0"
 			if ( 100 * (float(rgen) / float(gen))) < 93:
-				print "(float(rgen) / float(gen))) < 0.93"
+#				print "(float(rgen) / float(gen))) < 0.93"
 				gen = 1.07 * rgen
 			else:
-				print "(float(rgen) / float(gen))) >= 0.93"
+#				print "(float(rgen) / float(gen))) >= 0.93"
 				if float(loss) < 0.5:
-					print "float(loss) < 0.5"
+#					print "float(loss) < 0.5"
 ##			if float(loss) > 0:
 					return gen
 					break
 				gen = (float(gen) + float(spd))/2
 				gen = round(gen,2)
 		else:
-			print "loss = 0"
+#			print "loss = 0"
 			return gen
 			break
 
-
 def NuttcpProductionTest (PacketLenght, RemoteHostIP):
-	Speed = NuttcpUDP_test_modd (StartMbpsForNuttcp, PacketLenght, RemoteHostIP)
+	Speed = NuttcpUDP_test_mod (StartMbpsForNuttcp, PacketLenght, RemoteHostIP)
 	print Speed	
 	e = 5
+	res = []
+	vmstat_current_pid_on_s1 = StartVmstat(gate_2, port, username, password, RemoteFileVmstatS1)
+	vmstat_current_pid_on_s2 = StartVmstat(gate_1, port, username, password, RemoteFileVmstatS2)
 	while e != 0:
-##		vmstat_current_pid_on_s1 = StartVmstat(gate_2, port, username, password, RemoteFileVmstatS1)
-##		vmstat_current_pid_on_s2 = StartVmstat(gate_1, port, username, password, RemoteFileVmstatS2)
 		nuttcp = subprocess.Popen("nuttcp -u -T60" + " -Ri " + str(Speed) + "m" + " -l " + str(PacketLenght) + " " + str(RemoteHostIP), shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
 		nuttcpOtputs = nuttcp.stdout.readlines()
 		speed_wo_loss = nuttcpOtputs[-1].split()[6]
 		loss = nuttcpOtputs[-1].split()[-2]
 		print speed_wo_loss, "Mbps, PacketLenght is", PacketLenght, "lost", loss
-##		GetVmstatFiles(gate_2, port, username, password, LocalFileVmstatS1, RemoteFileVmstatS1)
-##		GetVmstatFiles(gate_1, port, username, password, LocalFileVmstatS2, RemoteFileVmstatS2)
-##		cpu_load_on_site1 = ParsingVmstatOutput(LocalFileVmstatS1)
-##		cpu_load_on_site2 = ParsingVmstatOutput(LocalFileVmstatS2)
-##		print cpu_load_on_site1, "CPU load on Site_1"
-##		print cpu_load_on_site2, "CPU load on Site_2"
-
+		res.append(round(float(speed_wo_loss),2))
 		e = e - 1
+	GetVmstatFiles(gate_2, port, username, password, LocalFileVmstatS1, RemoteFileVmstatS1)
+	GetVmstatFiles(gate_1, port, username, password, LocalFileVmstatS2, RemoteFileVmstatS2)
+	cpu_load_on_site1 = ParsingVmstatOutput(LocalFileVmstatS1)
+	cpu_load_on_site2 = ParsingVmstatOutput(LocalFileVmstatS2)
+	print res
+	print round(cpu_load_on_site1), "CPU load on Site_1"
+	print round(cpu_load_on_site2), "CPU load on Site_2"
 
-#LSPSwitch(lsp_pass, gate_2, port, username, password)
-IperfTCP_test (RemTrafGenMachineIP)
-#NuttcpProductionTest (UDP1400, RemTrafGenMachineIP)
-#NuttcpProductionTest (UDP512, RemTrafGenMachineIP)
-#NuttcpProductionTest (UDP64, RemTrafGenMachineIP)
+		
+		
+LSPSwitch(srv, gate_1, port, username, password)
+LSPSwitch(esp_c, gate_2, port, username, password)
+print esp_c
+IperfFullTCP_test()
+NuttcpProductionTest (UDP1400, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP512, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP64, RemTrafGenMachineIP)
+LSPSwitch(esp_imit, gate_2, port, username, password)
+print esp_imit
+IperfFullTCP_test()
+NuttcpProductionTest (UDP1400, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP512, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP64, RemTrafGenMachineIP)
+LSPSwitch(esp_ci, gate_2, port, username, password)
+print esp_ci
+IperfFullTCP_test()
+NuttcpProductionTest (UDP1400, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP512, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP64, RemTrafGenMachineIP)
+LSPSwitch(lsp_pass, gate_1, port, username, password)
+LSPSwitch(lsp_pass, gate_2, port, username, password)
+print lsp_pass
+IperfFullTCP_test()
+NuttcpProductionTest (UDP1400, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP512, RemTrafGenMachineIP)
+NuttcpProductionTest (UDP64, RemTrafGenMachineIP)
+
